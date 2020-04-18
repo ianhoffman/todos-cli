@@ -30,8 +30,8 @@ createTodo :: IO ()
 createTodo = do
     putStrLn "Add a todo: "
     description <- getLine
-    created_at <- fmap round Posix.getPOSIXTime
-    insertTodo (Todo.makeTodo description created_at)
+    createdAt <- fmap round Posix.getPOSIXTime
+    insertTodo (Todo.makeTodo description createdAt)
 
 
 setInProgress :: IO ()
@@ -77,10 +77,12 @@ parseInt :: String -> Maybe Int
 parseInt = readMaybe
 
 
+-- Compose formatTodos, sort, and getAllTodos. The <$> operator lifts each non-IO
+-- function (i.e., formatTodos and sort) into an IO context such that they can be composed
+-- with getAllTodos. This new composite function returns an IO action of type
+-- IO String, the output of which is "piped" into putStrLn.
 listTodos :: IO ()
-listTodos = do
-    rows <- getAllTodos
-    putStrLn (formatTodos (sort rows))
+listTodos = formatTodos <$> sort <$> getAllTodos >>= putStrLn
 
 
 -- updateTodoDescription :: Int -> String -> IO (Int)
