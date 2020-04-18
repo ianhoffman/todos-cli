@@ -80,7 +80,7 @@ parseInt = readMaybe
 -- Compose formatTodos, sort, and getAllTodos. The <$> operator lifts each non-IO
 -- function (i.e., formatTodos and sort) into an IO context such that they can be composed
 -- with getAllTodos. This new composite function produces an IO action of type
--- IO String, the output of which is fed into putStrLn.
+-- IO String, the output of which is " into putStrLn.
 listTodos :: IO ()
 listTodos = putStrLn =<< formatTodos <$> sort <$> getAllTodos
 
@@ -119,23 +119,30 @@ formatTodo todo = "\
     \Description: " ++ Todo.description todo ++ "\n\
     \Status: " ++ show (Todo.status todo) ++ "\n\
     \Created: " ++ show (Todo.createdAt todo) ++ "\n\
-    \id: " ++ maybe "" show (Todo.id_ todo) ++ "\n"
+    \id: " ++ (maybe "" show (Todo.id_ todo)) ++ "\n"
 
 
 insertTodo :: Todo.Todo -> IO ()
-insertTodo todo = do
-    conn <- getConnection
-    execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
-    close conn
+insertTodo todo = getConnection >>= createTable >>= executeInsert todo >>= close
 
 
 getConnection :: IO Connection
-getConnection = do
-    conn <- open ".todos.db"
-    execute_ conn "CREATE TABLE IF NOT EXISTS todos (\
+getConnection = open ".todos.db"
+
+
+createTable :: Connection -> IO Connection
+createTable conn = do 
+    execute_ conn "\
+        \CREATE TABLE IF NOT EXISTS todos (\
         \ id INTEGER PRIMARY KEY,\
         \ description VARCHAR (255) NOT NULL,\
         \ status VARCHAR (255) NOT NULL,\
         \ created_at INTEGER NOT NULL\
         \ )"
-    return conn 
+    return conn
+
+
+executeInsert :: Todo.Todo -> Connection -> IO Connection
+executeInsert todo conn = do
+    execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
+    return conn
