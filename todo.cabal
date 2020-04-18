@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 231e7a3adbe1eea17042ba194c11918d5550c6e04b8c1656f799896437238f33
+-- hash: b42e3402c3d2ca8cf756f2f8162a56ef301e0f2e47eb8c7e9f035b3910282d64
 
 name:           todo
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
     , direct-sqlite
     , sort
     , sqlite-simple
+    , text
     , time
   default-language: Haskell2010
 
@@ -53,6 +54,7 @@ executable todo-exe
     , direct-sqlite
     , sort
     , sqlite-simple
+    , text
     , time
     , todo
   default-language: Haskell2010
@@ -70,6 +72,7 @@ test-suite todo-test
     , direct-sqlite
     , sort
     , sqlite-simple
+    , text
     , time
     , todo
   default-language: Haskell2010
