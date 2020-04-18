@@ -4,95 +4,88 @@ module Lib
     ( run
     ) where
 
+import Data.Sort
+import Database.SQLite.Simple
+import Options.Applicative
 import qualified Todo as Todo
 import qualified Data.Time.Clock.POSIX as Posix
-import           Data.Sort
-import           Data.String
-import           Database.SQLite.Simple
--- import           Database.SQLite.Simple(close, execute, execute_, open, query_)
--- import           Database.SQLite.Simple.Internal(Connection)
-import           System.Environment
-import           Text.Read
 
 
 run :: IO ()
-run = getArgs >>= parse
+run = do
+    options <- execParser opts
+    case options of
+        Create -> createTodo
+        List -> listTodos
+        Edit todoId -> updateTodoDescription todoId "testing!"
 
 
-parse :: (Eq a, Data.String.IsString a) => [a] -> IO ()
-parse ["-a"] = createTodo
-parse ["-e"] = setInProgress
-parse ["-l"] = listTodos
-parse _ = putStrLn "NotImplemented"
+-- Parser
 
+data Action 
+    = Create
+    | List 
+    | Edit Int
+
+
+create :: Parser Action
+create = flag' Create
+    (  long "create"
+    <> short 'c'
+    <> help "Create a todo" )
+
+
+list :: Parser Action
+list = flag' List
+    (  long "list" 
+    <> short 'l'
+    <> help "List all todos" )
+
+
+-- TODO: Subparser for descriptions / setting status / changing priority. What is this API? 
+edit :: Parser Action
+edit = Edit <$> option auto
+    (  long "edit"
+    <> short 'e' 
+    <> help "Edit a todo"
+    <> metavar "INT" )
+
+
+input :: Parser Action
+input = create <|> list <|> edit
+
+
+opts :: ParserInfo Action
+opts = info (input <**> helper)
+    (  fullDesc 
+    <> progDesc "Manage your toods" 
+    <> header "This is a test" )
+
+
+-- Create
 
 createTodo :: IO ()
 createTodo = do
     putStrLn "Add a todo: "
     description <- getLine
-    createdAt <- fmap round Posix.getPOSIXTime
+    createdAt <- round <$> Posix.getPOSIXTime
     insertTodo (Todo.makeTodo description createdAt)
 
 
-setInProgress :: IO ()
-setInProgress = setStatus Todo.NotStarted Todo.InProgress
+insertTodo :: Todo.Todo -> IO ()
+insertTodo todo = getConnection >>= createTable >>= executeInsert todo >>= close
 
 
--- setComplete :: IO ()
--- setComplete = setStatus Todo.InProgress Todo.Done
+executeInsert :: Todo.Todo -> Connection -> IO Connection
+executeInsert todo conn = do
+    execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
+    return conn
 
 
-setStatus :: Todo.TodoStatus -> Todo.TodoStatus -> IO ()
-setStatus currentStatus desiredStatus = do
-    putStrLn "Enter a todo id: "
-    userInput <- getLine
-    numUpdated <- case parseInt userInput of
-        Nothing -> return 0
-        Just todoId -> do 
-            conn <- getConnection
-            executeNamed conn "UPDATE todos SET status=:desired_status WHERE id=:id AND status=:current_status" [
-                ":desired_status" := show desiredStatus,
-                ":current_status" := show currentStatus,
-                ":id" := todoId ]
-            close conn
-            changes conn
-    if numUpdated > 0 
-        then putStrLn $ "Updated todo " ++ userInput
-        else putStrLn $ userInput ++ " is not a valid id"
+-- List
 
-
--- editTodo :: IO ()
--- editTodo = do 
---     putStrLn "Enter a todo id: "
---     userInput <- getLine
---     numUpdated <- case parseInt userInput of
---         Nothing -> return 0
---         Just todoId -> updateTodoDescription todoId "foobaz"
---     if numUpdated > 0 
---         then putStrLn $ "Updated todo " ++ userInput
---         else putStrLn $ userInput ++ " is not a valid id"
-
-
-parseInt :: String -> Maybe Int
-parseInt = readMaybe
-
-
--- Compose formatTodos, sort, and getAllTodos. The <$> operator lifts each non-IO
--- function (i.e., formatTodos and sort) into an IO context such that they can be composed
--- with getAllTodos. This new composite function produces an IO action of type
--- IO String, the output of which is " into putStrLn.
 listTodos :: IO ()
 listTodos = putStrLn =<< formatTodos <$> sort <$> getAllTodos
-
-
--- updateTodoDescription :: Int -> String -> IO (Int)
--- updateTodoDescription todoId description = do
---     conn <- getConnection
---     executeNamed conn "UPDATE todos SET description=:description WHERE id=:id" [
---         ":description" := description, 
---         ":id" := todoId ]
---     close conn
---     changes conn
 
 
 getAllTodos :: IO [Todo.Todo]
@@ -101,12 +94,6 @@ getAllTodos = do
     todos <- query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
     close conn
     return todos
-
-
--- getTodoById :: [Todo.Todo] -> Maybe Int -> Maybe Todo.Todo
--- getTodoById allTodos todoId = case [ t | t <- allTodos, Todo.id_ t == todoId ] of
---     [] -> Nothing
---     (todo:_) -> Just todo
 
 
 formatTodos :: [Todo.Todo] -> String
@@ -122,8 +109,22 @@ formatTodo todo = "\
     \id: " ++ (maybe "" show (Todo.id_ todo)) ++ "\n"
 
 
-insertTodo :: Todo.Todo -> IO ()
-insertTodo todo = getConnection >>= createTable >>= executeInsert todo >>= close
+-- Update
+
+updateTodoDescription :: Int -> String -> IO ()
+updateTodoDescription todoId description = do
+    conn <- getConnection
+    executeNamed conn "UPDATE todos SET description=:description WHERE id=:id" [
+        ":description" := description, 
+        ":id" := todoId ]
+    close conn
+    numUpdated <- changes conn
+    if numUpdated > 0 
+        then putStrLn $ "Updated todo " ++ show todoId
+        else putStrLn $ show todoId ++ " is not a valid id"
+
+
+-- Util
 
 
 getConnection :: IO Connection
@@ -142,7 +143,40 @@ createTable conn = do
     return conn
 
 
-executeInsert :: Todo.Todo -> Connection -> IO Connection
-executeInsert todo conn = do
-    execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
-    return conn
+-- setInProgress :: IO ()
+-- setInProgress = setStatus Todo.NotStarted Todo.InProgress
+
+
+-- setComplete :: IO ()
+-- setComplete = setStatus Todo.InProgress Todo.Done
+
+
+-- setStatus :: Todo.TodoStatus -> Todo.TodoStatus -> IO ()
+-- setStatus currentStatus desiredStatus = do
+--     putStrLn "Enter a todo id: "
+--     userInput <- getLine
+--     numUpdated <- case parseInt userInput of
+--         Nothing -> return 0
+--         Just todoId -> do 
+--             conn <- getConnection
+--             executeNamed conn "UPDATE todos SET status=:desired_status WHERE id=:id AND status=:current_status" [
+--                 ":desired_status" := show desiredStatus,
+--                 ":current_status" := show currentStatus,
+--                 ":id" := todoId ]
+--             close conn
+--             changes conn
+--     if numUpdated > 0 
+--         then putStrLn $ "Updated todo " ++ userInput
+--         else putStrLn $ userInput ++ " is not a valid id"
+
+
+-- -- editTodo :: IO ()
+-- -- editTodo = do 
+-- --     putStrLn "Enter a todo id: "
+-- --     userInput <- getLine
+-- --     numUpdated <- case parseInt userInput of
+-- --         Nothing -> return 0
+-- --         Just todoId -> updateTodoDescription todoId "foobaz"
+-- --     if numUpdated > 0 
+-- --         then putStrLn $ "Updated todo " ++ userInput
+-- --         else putStrLn $ userInput ++ " is not a valid id"

@@ -26,6 +26,7 @@ dependencies:
 - text
 - sqlite-simple
 - direct-sqlite
+- optparse-applicative
 
 library:
   source-dirs: src
