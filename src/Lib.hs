@@ -79,10 +79,10 @@ parseInt = readMaybe
 
 -- Compose formatTodos, sort, and getAllTodos. The <$> operator lifts each non-IO
 -- function (i.e., formatTodos and sort) into an IO context such that they can be composed
--- with getAllTodos. This new composite function returns an IO action of type
--- IO String, the output of which is "piped" into putStrLn.
+-- with getAllTodos. This new composite function produces an IO action of type
+-- IO String, the output of which is fed into putStrLn.
 listTodos :: IO ()
-listTodos = formatTodos <$> sort <$> getAllTodos >>= putStrLn
+listTodos = putStrLn =<< formatTodos <$> sort <$> getAllTodos
 
 
 -- updateTodoDescription :: Int -> String -> IO (Int)
