@@ -58,45 +58,29 @@ opts = O.subparser (
 create :: String -> IO ()
 create desc = do
     createdAt <- round <$> Posix.getPOSIXTime
-    insertTodo (Todo.makeTodo desc createdAt)
+    conn <- getConnection
+    SQLite.execute 
+        conn 
+        "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" 
+        (Todo.makeTodo desc createdAt)
+    SQLite.close conn
     -- TODO: Output something
-
-
-insertTodo :: Todo.Todo -> IO ()
-insertTodo todo = getConnection >>= ensureTable >>= executeInsert todo >>= SQLite.close
-
-
-executeInsert :: Todo.Todo -> SQLite.Connection -> IO SQLite.Connection
-executeInsert todo conn = do
-    SQLite.execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
-    return conn
 
 
 -- List
 
 list :: IO ()
-list = putStrLn =<< formatTodos <$> sort <$> getAllTodos
-
-
-getAllTodos :: IO [Todo.Todo]
-getAllTodos = do
-    conn <- ensureTable =<< getConnection
+list = do
+    conn <- getConnection
     todos <- SQLite.query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
     SQLite.close conn
-    return todos
-
-
-formatTodos :: [Todo.Todo] -> String
-formatTodos = Prelude.foldl (\txt todo -> txt ++ formatTodo todo) ""
-
-
-formatTodo :: Todo.Todo -> String
-formatTodo todo = "\
-    \=======================================\n\
-    \Description: " ++ Todo.description todo ++ "\n\
-    \Status: " ++ show (Todo.status todo) ++ "\n\
-    \Created: " ++ show (Todo.createdAt todo) ++ "\n\
-    \id: " ++ (maybe "" show (Todo.id_ todo)) ++ "\n"
+    putStrLn $ Prelude.foldl (\txt todo -> txt ++ formatTodo todo) "" $ sort todos
+        where formatTodo t = "\
+            \=======================================\n\
+            \Description: " ++ Todo.description t ++ "\n\
+            \Status: " ++ show (Todo.status t) ++ "\n\
+            \Created: " ++ show (Todo.createdAt t) ++ "\n\
+            \id: " ++ (maybe "" show (Todo.id_ t)) ++ "\n"
 
 
 -- Edit
@@ -104,7 +88,7 @@ formatTodo todo = "\
 edit :: Int -> String -> String -> IO ()
 edit x y z = case checkEdit x y z of  -- TODO: Rename these or find a better way of doing this.
         Right (todoId, field, value) -> do
-            conn <- ensureTable =<< getConnection
+            conn <- getConnection
             SQLite.executeNamed 
                 conn 
                 (case field of
@@ -133,11 +117,8 @@ commaConcat = concat . intersperse ", " . map (\w -> "\"" ++ w ++ "\"")
 
 
 getConnection :: IO SQLite.Connection
-getConnection = SQLite.open ".todos.db"
-
-
-ensureTable :: SQLite.Connection -> IO SQLite.Connection
-ensureTable conn = do 
+getConnection = do
+    conn <- SQLite.open ".todos.db"
     SQLite.execute_ conn "\
         \CREATE TABLE IF NOT EXISTS todos (\
         \ id INTEGER PRIMARY KEY,\
