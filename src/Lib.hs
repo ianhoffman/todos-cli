@@ -4,20 +4,35 @@ module Lib
     ( run
     ) where
 
+import Data.List(intersperse)
 import Data.Sort
-import Database.SQLite.Simple
-import Options.Applicative
-import qualified Todo as Todo
+import Text.Read (readEither)
+import System.Environment
+import qualified Data.Char as Char
 import qualified Data.Time.Clock.POSIX as Posix
+import qualified Database.SQLite.Simple as SQLite
+import qualified Options.Applicative as O
+import qualified Todo as Todo
 
 
 run :: IO ()
 run = do
-    options <- execParser opts
+    args <- getNewArgs <$> getArgs
+    let options = O.execParserPure O.defaultPrefs (O.info input mempty) args
     case options of
-        Create -> createTodo
-        List -> listTodos
-        Edit todoId -> updateTodoDescription todoId "testing!"
+        O.Success Create -> createTodo
+        O.Success List -> listTodos
+        O.Success (Edit todoId field value) -> editTodo todoId field value
+        -- Success s -> putStrLn $ "Unexpected success " ++ show s
+        O.Failure _ -> putStrLn =<< show <$> O.handleParseResult options
+        s -> putStrLn $ "Unexpected error " ++ show s
+
+
+-- TODO: Figure out how to inline this
+getNewArgs :: [String] -> [String]
+getNewArgs [] = []
+getNewArgs [x] = [x]
+getNewArgs (x:xs) = [x] ++ [unwords xs]
 
 
 -- Parser
@@ -25,45 +40,49 @@ run = do
 data Action 
     = Create
     | List 
-    | Edit Int
+    | Edit Int ValidField String
+    deriving Show
 
 
-create :: Parser Action
-create = flag' Create
-    (  long "create"
-    <> short 'c'
-    <> help "Create a todo" )
+create :: O.Parser Action
+create = O.flag' Create
+    $  O.long "create"
+    <> O.short 'c'
+    <> O.help "Create a todo" 
 
 
-list :: Parser Action
-list = flag' List
-    (  long "list" 
-    <> short 'l'
-    <> help "List all todos" )
+list :: O.Parser Action
+list = O.flag' List
+    $  O.long "list" 
+    <> O.short 'l'
+    <> O.help "List all todos" 
 
 
--- TODO: Subparser for descriptions / setting status / changing priority. What is this API? 
-edit :: Parser Action
-edit = Edit <$> option auto
-    (  long "edit"
-    <> short 'e' 
-    <> help "Edit a todo"
-    <> metavar "INT" )
+edit :: O.Parser Action
+edit = O.option (O.eitherReader $ \inp -> case checkEdit (words inp) of 
+        Right (x, y, z) -> Right (Edit x y z)
+        Left s -> Left s )
+    $  O.long "edit" 
+    <> O.short 'e' 
+    <> O.metavar "Edit" 
+    <> O.help "Edit a todo"
 
 
-input :: Parser Action
-input = create <|> list <|> edit
+input :: O.Parser Action
+input = create O.<|> list O.<|> edit
 
 
-opts :: ParserInfo Action
-opts = info (input <**> helper)
-    (  fullDesc 
-    <> progDesc "Manage your toods" 
-    <> header "This is a test" )
+-- TODO: Get help text working again --
+-- opts :: ParserInfo Action
+-- opts = info (input <**> helper)
+--     (  fullDesc 
+--     <> progDesc "Manage your todos" 
+--     <> header "todo-cli: Manage your todos from the CLI" )
 
 
 -- Create
 
+-- TODO: Supply arg via argument parser, not getLine --
 createTodo :: IO ()
 createTodo = do
     putStrLn "Add a todo: "
@@ -73,12 +92,12 @@ createTodo = do
 
 
 insertTodo :: Todo.Todo -> IO ()
-insertTodo todo = getConnection >>= createTable >>= executeInsert todo >>= close
+insertTodo todo = getConnection >>= ensureTable >>= executeInsert todo >>= SQLite.close
 
 
-executeInsert :: Todo.Todo -> Connection -> IO Connection
+executeInsert :: Todo.Todo -> SQLite.Connection -> IO SQLite.Connection
 executeInsert todo conn = do
-    execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
+    SQLite.execute conn "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" todo
     return conn
 
 
@@ -90,9 +109,9 @@ listTodos = putStrLn =<< formatTodos <$> sort <$> getAllTodos
 
 getAllTodos :: IO [Todo.Todo]
 getAllTodos = do
-    conn <- getConnection
-    todos <- query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
-    close conn
+    conn <- ensureTable =<< getConnection
+    todos <- SQLite.query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
+    SQLite.close conn
     return todos
 
 
@@ -111,29 +130,42 @@ formatTodo todo = "\
 
 -- Update
 
-updateTodoDescription :: Int -> String -> IO ()
-updateTodoDescription todoId description = do
+editTodo :: Int -> ValidField -> String -> IO ()
+editTodo todoId field value = do 
     conn <- getConnection
-    executeNamed conn "UPDATE todos SET description=:description WHERE id=:id" [
-        ":description" := description, 
-        ":id" := todoId ]
-    close conn
-    numUpdated <- changes conn
-    if numUpdated > 0 
+    SQLite.executeNamed 
+        conn 
+        (case field of
+            Description -> "UPDATE todos SET description=:desired_value WHERE id=:id"
+            Status -> "UPDATE todos SET status=:desired_value WHERE id=:id") 
+        [
+            ":desired_value" SQLite.:= value, 
+            ":id" SQLite.:= todoId]
+    SQLite.close conn
+    numUpdated <- SQLite.changes conn
+    if numUpdated > 0
         then putStrLn $ "Updated todo " ++ show todoId
         else putStrLn $ show todoId ++ " is not a valid id"
 
 
 -- Util
 
+capitalize :: String -> String
+capitalize (x:xs) = Char.toUpper x : xs
+capitalize [] = []
 
-getConnection :: IO Connection
-getConnection = open ".todos.db"
+
+commaConcat :: [String] -> String
+commaConcat = concat . intersperse ", " . map (\w -> "\"" ++ w ++ "\"")
 
 
-createTable :: Connection -> IO Connection
-createTable conn = do 
-    execute_ conn "\
+getConnection :: IO SQLite.Connection
+getConnection = SQLite.open ".todos.db"
+
+
+ensureTable :: SQLite.Connection -> IO SQLite.Connection
+ensureTable conn = do 
+    SQLite.execute_ conn "\
         \CREATE TABLE IF NOT EXISTS todos (\
         \ id INTEGER PRIMARY KEY,\
         \ description VARCHAR (255) NOT NULL,\
@@ -143,40 +175,46 @@ createTable conn = do
     return conn
 
 
--- setInProgress :: IO ()
--- setInProgress = setStatus Todo.NotStarted Todo.InProgress
+-- Validation
+
+data ValidField
+    = Description
+    | Status
+    deriving (Bounded, Enum, Eq, Read, Show)
 
 
--- setComplete :: IO ()
--- setComplete = setStatus Todo.InProgress Todo.Done
+readField :: String -> Either String ValidField
+readField = readEither . capitalize
 
 
--- setStatus :: Todo.TodoStatus -> Todo.TodoStatus -> IO ()
--- setStatus currentStatus desiredStatus = do
---     putStrLn "Enter a todo id: "
---     userInput <- getLine
---     numUpdated <- case parseInt userInput of
---         Nothing -> return 0
---         Just todoId -> do 
---             conn <- getConnection
---             executeNamed conn "UPDATE todos SET status=:desired_status WHERE id=:id AND status=:current_status" [
---                 ":desired_status" := show desiredStatus,
---                 ":current_status" := show currentStatus,
---                 ":id" := todoId ]
---             close conn
---             changes conn
---     if numUpdated > 0 
---         then putStrLn $ "Updated todo " ++ userInput
---         else putStrLn $ userInput ++ " is not a valid id"
+checkEdit :: [String] -> Either String (Int, ValidField, String)
+checkEdit [todoId, field, value] = (,,) 
+    <$> checkId todoId
+    <*> checkField field
+    <*> checkValue field value
+checkEdit _ = Left "Edit expects a todo id, a field to edit, and a value for that field"
 
 
--- -- editTodo :: IO ()
--- -- editTodo = do 
--- --     putStrLn "Enter a todo id: "
--- --     userInput <- getLine
--- --     numUpdated <- case parseInt userInput of
--- --         Nothing -> return 0
--- --         Just todoId -> updateTodoDescription todoId "foobaz"
--- --     if numUpdated > 0 
--- --         then putStrLn $ "Updated todo " ++ userInput
--- --         else putStrLn $ userInput ++ " is not a valid id"
+checkId :: String -> Either String Int
+checkId = readEither
+
+
+checkField :: String -> Either String ValidField
+checkField field = case readField field of
+    Right validField -> Right validField
+    Left _ -> Left $ field
+        ++ " is not a valid field. Valid options are " 
+        ++ commaConcat (map show [Description, Status])
+
+
+checkValue :: String -> String -> Either String String
+checkValue field value = case readField field of
+    Right validField -> case validField of
+        Description -> Right value
+        Status -> case value `elem` validValues of
+            True -> Right value
+            False -> Left $ value 
+                ++ " must be one of " 
+                ++ commaConcat validValues
+        where validValues = ["In Progress", "Done", "Not Started"]
+    Left s -> Left s

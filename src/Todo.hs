@@ -21,6 +21,7 @@ instance FromField TodoStatus where
         "Done" -> Ok(Done)
         "In Progress" -> Ok(InProgress)
         "Not Started" -> Ok(NotStarted)
+        -- FIXME: Why does this always return Done?
         _ -> Ok(Done)
         -- _ -> returnError ConversionFailed f "invalid value"
     fromField f = returnError ConversionFailed f "need a text"

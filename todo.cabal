@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 1dd1a6e97bc054618c68d67f949ca5d5929b110b42a094760f24fcd19ccb3735
+-- hash: 413bee9ff64c666278a34b2e51d1a19a7c8527b98a93ac81078a2077b902d51b
 
 name:           todo
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
     , direct-sqlite
     , optparse-applicative
     , sort
+    , split
     , sqlite-simple
     , text
     , time
@@ -55,6 +56,7 @@ executable todo-exe
     , direct-sqlite
     , optparse-applicative
     , sort
+    , split
     , sqlite-simple
     , text
     , time
@@ -74,6 +76,7 @@ test-suite todo-test
     , direct-sqlite
     , optparse-applicative
     , sort
+    , split
     , sqlite-simple
     , text
     , time

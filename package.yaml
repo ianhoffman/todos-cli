@@ -24,6 +24,7 @@ dependencies:
 - time
 - sort
 - text
+- split
 - sqlite-simple
 - direct-sqlite
 - optparse-applicative
