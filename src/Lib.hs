@@ -33,24 +33,31 @@ opts :: O.Parser (IO ())
 opts = O.subparser (
         O.command "create" (
             O.info (
-                create 
-                <$> O.strArgument (O.metavar "DESCRIPTION")) 
-            (O.progDesc "Create a todo")
+                subOpts
+                $ create 
+                <$> O.strArgument (O.metavar "DESCRIPTION"))
+            (subDesc "Create a todo")
         )
         <> O.command "edit" (
             O.info (
-                edit 
+                subOpts
+                $ edit 
                 <$> O.argument O.auto (O.metavar "TODO_ID")
                 <*> O.strArgument (O.metavar "FIELD") 
-                <*> O.strArgument (O.metavar "VALUE")) 
-            (O.progDesc "Edit a todo")
+                <*> O.strArgument (O.metavar "VALUE"))
+            (subDesc "Edit a todo")
         ) 
         <>  O.command "list" (
             O.info (
-                pure list) 
-            (O.progDesc "List all todos")
+                subOpts 
+                $ pure list) 
+            (subDesc "List all todos")
         )
     )
+    where subDesc desc = O.fullDesc <> O.progDesc desc <> O.header desc
+          subOpts action = action O.<**> O.helper
+
+
 
 
 -- Create
