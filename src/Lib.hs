@@ -36,7 +36,13 @@ opts = O.subparser (
             O.info (
                 subOpts
                 $ create 
-                <$> O.strArgument (O.metavar "DESCRIPTION"))
+                <$> O.strArgument (O.metavar "DESCRIPTION")
+                <*> O.strOption (
+                    O.long "priority"
+                    <> O.short 'p'
+                    <> O.help "Priority of the todo"
+                    <> O.value "Medium"
+                    <> O.metavar "PRIORITY"))
             (subDesc "Create a todo")
         )
         <> O.command "edit" (
@@ -59,13 +65,17 @@ opts = O.subparser (
                 <*> O.strOption (
                     O.long "sort"
                     <> O.short 's'
-                    <> O.value "status"
+                    <> O.value "priority"
                     <> O.metavar "SORT"
                     <> O.help "Sort options")
                 <*> O.switch (
                     O.long "reverse"
                     <> O.short 'r'
                     <> O.help "Sort in reverse")
+                <*> O.switch (
+                    O.long "all"
+                    <> O.short 'a'
+                    <> O.help "Show all todos")
                 ) 
             (subDesc "List all todos")
         )
@@ -78,24 +88,30 @@ opts = O.subparser (
 
 -- Create
 
-create :: String -> IO ()
-create desc = do
+create :: String -> String -> IO ()
+create desc priority = do
     createdAt <- round <$> Posix.getPOSIXTime
     conn <- getConnection
-    SQLite.execute 
-        conn 
-        "INSERT INTO todos (description, status, created_at) VALUES (?, ?, ?)" 
-        (Todo.makeTodo desc createdAt)
-    SQLite.close conn
-    -- TODO: Output something
+    case checkValue "priority" priority of 
+        Right validPriority -> do
+            SQLite.execute 
+                conn 
+                "INSERT INTO todos (description, priority, status, created_at) VALUES (?, ?, ?, ?)" 
+                (Todo.makeTodo desc validPriority createdAt)
+            SQLite.close conn
+            putStrLn =<< 
+                (\r -> "Todo " ++ r ++ " (" ++ desc ++ ") created on " ++ formatCreatedAt createdAt) 
+                . show 
+                <$> SQLite.lastInsertRowId conn
+        Left s -> putStrLn s
 
 
 -- List
 
-list :: Bool -> String -> Bool -> IO ()
-list verbose s r = do
+list :: Bool -> String -> Bool -> Bool -> IO ()
+list verbose s r a = do
     conn <- getConnection
-    todos <- SQLite.query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
+    todos <- filterTodos a <$> SQLite.query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
     SQLite.close conn
     putStrLn $ case sortTodos todos s r of 
         Right ts -> Prelude.foldl (\txt todo -> txt ++ formatTodo verbose todo ++ "\n") "" ts
@@ -112,6 +128,7 @@ edit x y z = case checkEdit x y z of  -- TODO: Rename these or find a better way
                 conn 
                 (case field of
                     Description -> "UPDATE todos SET description=:desired_value WHERE id=:id"
+                    Priority -> "UPDATE todos SET priority=:desired_value WHERE id=:id"
                     Status -> "UPDATE todos SET status=:desired_value WHERE id=:id") 
                 [
                     ":desired_value" SQLite.:= value, 
@@ -135,17 +152,28 @@ commaConcat :: [String] -> String
 commaConcat = concat . intersperse ", " . map (\w -> "\"" ++ w ++ "\"")
 
 
+filterTodos :: Bool -> [Todo.Todo] -> [Todo.Todo]
+filterTodos a todos = case a of
+    True -> todos
+    False -> filter (\t -> notElem (Todo.status t) [Todo.Done, Todo.WontDo]) todos
+
+
+formatCreatedAt :: Int -> String
+formatCreatedAt = show . utctDay . Posix.posixSecondsToUTCTime . fromIntegral 
+
+
 formatTodo :: Bool -> Todo.Todo -> String
 formatTodo verbose = concat 
     . case verbose of
         True -> intersperse "\n"
             . ("=====================================":)
             . map (\t -> fst t ++ ": " ++ snd t) 
-            . zip ["Description", "Status", "Created", "ID"] 
+            . zip ["Description", "Priority", "Status", "Created", "ID"] 
         False -> intersperse "|" 
     . ([maybe "" show . Todo.id_, 
-        show . Todo.status, 
-        show . utctDay . Posix.posixSecondsToUTCTime . fromIntegral . Todo.createdAt, 
+        show . Todo.priority,
+        show . Todo.status,
+        formatCreatedAt . Todo.createdAt,
         Todo.description] <*>)
     . pure
 
@@ -157,6 +185,7 @@ getConnection = do
         \CREATE TABLE IF NOT EXISTS todos (\
         \ id INTEGER PRIMARY KEY,\
         \ description VARCHAR (255) NOT NULL,\
+        \ priority VARCHAR (255) NOT NULL,\
         \ status VARCHAR (255) NOT NULL,\
         \ created_at INTEGER NOT NULL\
         \ )"
@@ -167,6 +196,7 @@ getConnection = do
 
 data ValidField
     = Description
+    | Priority
     | Status
     deriving (Bounded, Enum, Eq, Read, Show)
 
@@ -194,23 +224,31 @@ checkValue :: String -> String -> Either String String
 checkValue field value = case readField field of
     Right validField -> case validField of
         Description -> Right value
+        Priority -> case value `elem` validValues of
+            True -> Right value
+            False -> Left $ value 
+                ++ " must be one of " 
+                ++ commaConcat validValues
+            where validValues = ["Urgent", "High", "Medium", "Low"]
         Status -> case value `elem` validValues of
             True -> Right value
             False -> Left $ value 
                 ++ " must be one of " 
                 ++ commaConcat validValues
-        where validValues = ["In Progress", "Done", "Not Started"]
+            where validValues = ["In Progress", "Done", "Not Started"]
     Left s -> Left s
 
 
 -- Sorting
 
 data ValidSort
-    = StatusSort
+    = PrioritySort
+    | StatusSort
     | TimestampSort
 
 
 readSort :: String -> Either String ValidSort
+readSort "priority" = Right PrioritySort
 readSort "status" = Right StatusSort
 readSort "timestamp" = Right TimestampSort
 readSort s = Left $ "Invalid sort option \"" ++ s ++ "\""
@@ -230,21 +268,25 @@ maybeFlip False = id
 
 compareTodos :: ValidSort -> Todo.Todo -> Todo.Todo -> Ordering
 compareTodos validSort t1 t2 = case validSort of
-    StatusSort -> case compareStatus (Todo.status t1) (Todo.status t2) of
-        GT -> GT
-        LT -> LT
-        EQ -> compare (Todo.createdAt t1) (Todo.createdAt t2)
-    TimestampSort -> case compare (Todo.createdAt t1) (Todo.createdAt t2) of
-        GT -> GT
-        LT -> LT
-        EQ -> compareStatus (Todo.status t1) (Todo.status t2)
+    PrioritySort -> runCompare [comparePriority, compareStatus, compareCreatedAt] t1 t2
+    StatusSort -> runCompare [compareStatus, comparePriority, compareCreatedAt] t1 t2
+    TimestampSort -> runCompare [compareCreatedAt, comparePriority, compareStatus] t1 t2
 
 
-compareStatus :: Todo.TodoStatus -> Todo.TodoStatus -> Ordering
-compareStatus Todo.Done Todo.Done = EQ
-compareStatus Todo.Done _ = GT
-compareStatus _ Todo.Done = LT
-compareStatus Todo.InProgress Todo.InProgress = EQ
-compareStatus Todo.InProgress _ = GT
-compareStatus _ Todo.InProgress = LT
-compareStatus Todo.NotStarted Todo.NotStarted = EQ
+runCompare :: [(Todo.Todo -> Todo.Todo -> Ordering)] -> Todo.Todo -> Todo.Todo -> Ordering
+runCompare [] _ _ = EQ
+runCompare (comparator:comparators) t1 t2 = case comparator t1 t2 of
+    EQ -> runCompare comparators t1 t2
+    x -> x
+
+
+comparePriority :: Todo.Todo -> Todo.Todo -> Ordering
+comparePriority t1 t2 = compare (Todo.priority t1) (Todo.priority t2)
+
+
+compareStatus :: Todo.Todo -> Todo.Todo -> Ordering
+compareStatus t1 t2 = compare (Todo.status t1) (Todo.status t2)
+
+
+compareCreatedAt :: Todo.Todo -> Todo.Todo -> Ordering
+compareCreatedAt t1 t2 = compare (Todo.createdAt t1) (Todo.createdAt t2)
