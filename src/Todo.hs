@@ -1,5 +1,6 @@
 module Todo where
 
+import Data.Text(unpack)
 import qualified Database.SQLite3 as Base
 import Database.SQLite.Simple(ResultError(..), toRow, ToRow)
 import Database.SQLite.Simple.FromField(fromField, FromField, returnError)
@@ -8,7 +9,12 @@ import Database.SQLite.Simple.Internal
 import Database.SQLite.Simple.Ok
 
 
-data TodoStatus = Done | InProgress | NotStarted deriving (Enum)
+data TodoStatus 
+    = Done 
+    | InProgress 
+    | NotStarted 
+    deriving (Enum)
+
 
 instance Show TodoStatus where
     show Done = "Done"
@@ -17,14 +23,13 @@ instance Show TodoStatus where
 
 
 instance FromField TodoStatus where
-    fromField (Field (Base.SQLText txt) _) = case show (txt) of
-        "Done" -> Ok(Done)
-        "In Progress" -> Ok(InProgress)
-        "Not Started" -> Ok(NotStarted)
-        -- FIXME: Why does this always return Done?
-        _ -> Ok(Done)
-        -- _ -> returnError ConversionFailed f "invalid value"
-    fromField f = returnError ConversionFailed f "need a text"
+    fromField f = case f of
+        (Field (Base.SQLText txt) _) -> case unpack txt of
+            "Done" -> Ok(Done)
+            "In Progress" -> Ok(InProgress)
+            "Not Started" -> Ok(NotStarted)
+            _ -> returnError ConversionFailed f "invalid value"
+        _ -> returnError ConversionFailed f "need a text"
 
 
 data Todo = Todo {

@@ -6,6 +6,7 @@ module Lib
 
 import Data.List(intersperse)
 import Data.Sort
+import Data.Time(utctDay)
 import Text.Read (readEither)
 import qualified Data.Char as Char
 import qualified Control.Monad as CM
@@ -50,7 +51,22 @@ opts = O.subparser (
         <>  O.command "list" (
             O.info (
                 subOpts 
-                $ pure list) 
+                $ list
+                <$> O.switch ( 
+                    O.long "verbose" 
+                    <> O.short 'v' 
+                    <> O.help "Display verbose output")
+                <*> O.strOption (
+                    O.long "sort"
+                    <> O.short 's'
+                    <> O.value "status"
+                    <> O.metavar "SORT"
+                    <> O.help "Sort options")
+                <*> O.switch (
+                    O.long "reverse"
+                    <> O.short 'r'
+                    <> O.help "Sort in reverse")
+                ) 
             (subDesc "List all todos")
         )
     )
@@ -76,18 +92,14 @@ create desc = do
 
 -- List
 
-list :: IO ()
-list = do
+list :: Bool -> String -> Bool -> IO ()
+list verbose s r = do
     conn <- getConnection
     todos <- SQLite.query_ conn "SELECT * FROM todos" :: IO [Todo.Todo]
     SQLite.close conn
-    putStrLn $ Prelude.foldl (\txt todo -> txt ++ formatTodo todo) "" $ sort todos
-        where formatTodo t = "\
-            \=======================================\n\
-            \Description: " ++ Todo.description t ++ "\n\
-            \Status: " ++ show (Todo.status t) ++ "\n\
-            \Created: " ++ show (Todo.createdAt t) ++ "\n\
-            \id: " ++ (maybe "" show (Todo.id_ t)) ++ "\n"
+    putStrLn $ case sortTodos todos s r of 
+        Right ts -> Prelude.foldl (\txt todo -> txt ++ formatTodo verbose todo ++ "\n") "" ts
+        Left err -> err
 
 
 -- Edit
@@ -123,6 +135,21 @@ commaConcat :: [String] -> String
 commaConcat = concat . intersperse ", " . map (\w -> "\"" ++ w ++ "\"")
 
 
+formatTodo :: Bool -> Todo.Todo -> String
+formatTodo verbose = concat 
+    . case verbose of
+        True -> intersperse "\n"
+            . ("=====================================":)
+            . map (\t -> fst t ++ ": " ++ snd t) 
+            . zip ["Description", "Status", "Created", "ID"] 
+        False -> intersperse "|" 
+    . ([maybe "" show . Todo.id_, 
+        show . Todo.status, 
+        show . utctDay . Posix.posixSecondsToUTCTime . fromIntegral . Todo.createdAt, 
+        Todo.description] <*>)
+    . pure
+
+
 getConnection :: IO SQLite.Connection
 getConnection = do
     conn <- SQLite.open ".todos.db"
@@ -150,8 +177,8 @@ readField = readEither . capitalize
 
 checkEdit :: Int -> String -> String -> Either String (Int, ValidField, String)
 checkEdit todoId field value = (,,) 
-    <$> Right todoId
-    <*> checkField field
+    todoId
+    <$> checkField field
     <*> checkValue field value
 
 
@@ -174,3 +201,50 @@ checkValue field value = case readField field of
                 ++ commaConcat validValues
         where validValues = ["In Progress", "Done", "Not Started"]
     Left s -> Left s
+
+
+-- Sorting
+
+data ValidSort
+    = StatusSort
+    | TimestampSort
+
+
+readSort :: String -> Either String ValidSort
+readSort "status" = Right StatusSort
+readSort "timestamp" = Right TimestampSort
+readSort s = Left $ "Invalid sort option \"" ++ s ++ "\""
+
+
+sortTodos :: [Todo.Todo] -> String -> Bool -> Either String [Todo.Todo]
+sortTodos todos s r = case readSort s of
+    Right validSort -> 
+        Right $ sortBy (\t1 t2 -> (maybeFlip r . compareTodos) validSort t1 t2) todos
+    Left err -> Left $ show err
+
+
+maybeFlip :: Bool -> (b -> b -> c) -> b -> b -> c
+maybeFlip True = flip
+maybeFlip False = id
+
+
+compareTodos :: ValidSort -> Todo.Todo -> Todo.Todo -> Ordering
+compareTodos validSort t1 t2 = case validSort of
+    StatusSort -> case compareStatus (Todo.status t1) (Todo.status t2) of
+        GT -> GT
+        LT -> LT
+        EQ -> compare (Todo.createdAt t1) (Todo.createdAt t2)
+    TimestampSort -> case compare (Todo.createdAt t1) (Todo.createdAt t2) of
+        GT -> GT
+        LT -> LT
+        EQ -> compareStatus (Todo.status t1) (Todo.status t2)
+
+
+compareStatus :: Todo.TodoStatus -> Todo.TodoStatus -> Ordering
+compareStatus Todo.Done Todo.Done = EQ
+compareStatus Todo.Done _ = GT
+compareStatus _ Todo.Done = LT
+compareStatus Todo.InProgress Todo.InProgress = EQ
+compareStatus Todo.InProgress _ = GT
+compareStatus _ Todo.InProgress = LT
+compareStatus Todo.NotStarted Todo.NotStarted = EQ
